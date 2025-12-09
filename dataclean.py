@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import io # Needed for df.info() in the overview tab
+import io # <-- THIS WAS THE LIKELY MISSING IMPORT CAUSING AN ERROR
 
 # --- Configuration ---
 st.set_page_config(
@@ -17,7 +17,6 @@ st.set_page_config(
 def load_data(uploaded_file):
     """Loads CSV data into a DataFrame and performs initial cleaning."""
     try:
-        # Assuming the uploaded file is your CSV
         df = pd.read_csv(uploaded_file)
         
         # Standardize column names by stripping whitespace
@@ -49,4 +48,34 @@ def load_data(uploaded_file):
                     return 'inflow'
                 elif row['Direction'] == 'outflow':
                     # Heuristics to identify fees (common in ledgers)
-                    if any(fee_keyword in str(row
+                    if any(fee_keyword in str(row['Event Label']).lower() for fee_keyword in ['fee', 'gas', 'transaction cost']):
+                        return 'fees'
+                    else:
+                        return 'outflow'
+                else:
+                    return 'other'
+            
+            df['Transaction Type'] = df.apply(categorize_transaction, axis=1)
+            
+        # Ensure Timestamp is datetime for monthly report (Report 4)
+        if 'Timestamp' in df.columns:
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+            df.dropna(subset=['Timestamp'], inplace=True)
+
+        return df
+    except Exception as e:
+        st.error(f"Error loading or processing file: {e}")
+        st.error("Please check that your column headers (like 'Balance Impact (T)', 'Total Fiat Amount ($)', etc.) match exactly.")
+        return pd.DataFrame() # Return empty DataFrame on failure
+
+
+# -------------------------------------------------------------------------
+# --- Streamlit App Layout ---
+# -------------------------------------------------------------------------
+
+st.title("📊 Transaction Ledger Analysis Dashboard")
+st.markdown("Navigate through the tabs below to view different reports generated from your ledger data.")
+
+# --- Sidebar for File Upload and Global Filter ---
+with st.sidebar:
+    st.header("
