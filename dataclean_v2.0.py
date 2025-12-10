@@ -154,9 +154,60 @@ if 'Transaction Hash' in df.columns:
         # 6. Apply the Group Comment
         df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
         
-        # 7. Final Safe Type Casting: Convert Group ID to a string for display, replacing NaN with empty string
-        # Using a temporary Series for safe conversion
-        df['Group ID'] = df['Group ID'].astype('Int64').fillna('').astype(str).replace('<NA>', '')
-
+        # 7. Final Safe Type Casting (The definitive fix for display errors)
+        # Convert to integer type that can hold NaNs, fill NaNs with 0, then cast to string
+        # This prevents errors from trying to cast empty strings or NaN directly to int/float for display.
+        df['Group ID'] = df['Group ID'].fillna(0).astype(int).astype(str).replace('0', '')
+        
     except Exception as e:
-        st.error(f"
+        st.error(f"Error during Transaction Grouping logic: {e}")
+        st.error("Please check the consistency and data types of your 'Transaction Hash' column.")
+        df['Group ID'] = ''
+        df['Group Comment'] = 'Grouping Failed'
+
+else:
+    st.error("Cannot perform Transaction Grouping. Missing 'Transaction Hash' column.")
+
+
+# --- Main Report Tabs ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔍 Data Overview", 
+    "💸 Report 1: Currency Filter", 
+    "⚖️ Report 2: Net Flow & Fees", 
+    "💰 Report 3: Running Balance",
+    "📈 Suggested Analytics"
+])
+
+# =========================================================================
+# Tab 1: Data Overview
+# =========================================================================
+with tab1:
+    st.header("Dataset Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Transactions", f"{len(df):,}")
+    
+    if 'Timestamp' in df.columns and not df['Timestamp'].empty:
+        with col2:
+            st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
+        with col3:
+            st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
+    else:
+         with col2:
+            st.metric("Start Date", "N/A")
+         with col3:
+            st.metric("End Date", "N/A")
+
+    # --- DEBUGGING FEATURE: Check loaded columns ---
+    st.subheader("All Loaded Column Headers")
+    st.code(list(df.columns))
+    st.markdown("---")
+    
+    st.subheader("First 5 Rows of Data")
+    st.dataframe(df.head(), use_container_width=True)
+    
+    st.subheader("Column Information")
+    buffer = io.StringIO()
+    df.info(buf=buffer)
