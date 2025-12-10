@@ -71,8 +71,10 @@ def load_data(uploaded_file):
             
         # Ensure Timestamp is datetime for sorting and plotting
         if 'Timestamp' in df.columns:
+            # Convert to datetime, coercing errors to NaT (Not a Time)
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            df.dropna(subset=['Timestamp'], inplace=True)
+            # Note: We remove NaT/NaN here, but will add another check before resampling in Report 5.
+            # df.dropna(subset=['Timestamp'], inplace=True) 
 
         return df
     except Exception as e:
@@ -120,7 +122,7 @@ if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
     # 2. Calculate Running Balance for each Token
     df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
 
-    # 3. Create Status Column for Negative Balances (NEW FEATURE)
+    # 3. Create Status Column for Negative Balances
     df['Balance Status'] = df['Running Balance (T)'].apply(
         lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
     )
@@ -269,7 +271,7 @@ with tab4:
     st.header("Report 3: Token Running Balance")
     st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**. Includes a **`Balance Status`** warning.")
     
-    if 'Running Balance (T)' in df.columns:
+    if 'Running Balance (T)' in df.columns and 'Timestamp' in df.columns:
         rb_currency_options = df['Original Currency Symbol'].unique()
         selected_rb_currency = st.selectbox(
             "**Select a Token to view its Running Balance:**",
@@ -380,12 +382,16 @@ with tab5:
         
         if 'Timestamp' in df.columns and 'Total Fiat Amount ($)' in df.columns:
             try:
-                monthly_data = df.set_index('Timestamp').resample('M').agg(
+                # --- FIX: Create a temporary DataFrame and filter out NaT before resampling ---
+                temp_df = df[['Timestamp', 'Total Fiat Amount ($)']].dropna(subset=['Timestamp']).copy()
+                
+                monthly_data = temp_df.set_index('Timestamp').resample('M').agg(
                     transaction_count=('Timestamp', 'size'),
                     total_fiat_value=('Total Fiat Amount ($)', 'sum')
                 ).reset_index()
                 
                 monthly_data['Month'] = monthly_data['Timestamp'].dt.to_period('M').astype(str)
+                # --- END FIX ---
 
                 # Display table
                 display_monthly = monthly_data[['Month', 'transaction_count', 'total_fiat_value']].rename(
