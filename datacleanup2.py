@@ -119,6 +119,12 @@ if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
 
     # 2. Calculate Running Balance for each Token
     df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
+
+    # 3. Create Status Column for Negative Balances (NEW FEATURE)
+    df['Balance Status'] = df['Running Balance (T)'].apply(
+        lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
+    )
+
 else:
     st.error("Cannot calculate Running Balance. Missing 'Timestamp' or 'Balance Impact (T)' column. Check Tab 1 for loaded column names.")
 
@@ -261,9 +267,9 @@ with tab3:
 # =========================================================================
 with tab4:
     st.header("Report 3: Token Running Balance")
-    st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**.")
+    st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**. Includes a **`Balance Status`** warning.")
     
-    if 'Running Balance (T)' in df.columns and 'Timestamp' in df.columns:
+    if 'Running Balance (T)' in df.columns:
         rb_currency_options = df['Original Currency Symbol'].unique()
         selected_rb_currency = st.selectbox(
             "**Select a Token to view its Running Balance:**",
@@ -282,6 +288,7 @@ with tab4:
             'Event Label',
             'Balance Impact (T)', 
             'Running Balance (T)',
+            'Balance Status', # NEW COLUMN
             'Total Fiat Amount ($)',
             'From Address Name', 
             'To Address Name'
@@ -318,8 +325,6 @@ with tab4:
         ).interactive()
 
         st.altair_chart(rb_chart, use_container_width=True)
-        # Add visual context for time-series analysis
-        st.markdown("")
     else:
         st.error("Running Balance calculation failed. Please ensure 'Timestamp' and 'Balance Impact (T)' columns are present and data is numeric.")
 
