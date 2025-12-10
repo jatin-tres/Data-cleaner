@@ -54,9 +54,9 @@ def load_data(uploaded_file):
         if 'Original Currency Symbol' in df.columns:
             df['Original Currency Symbol'] = df['Original Currency Symbol'].fillna('UNKNOWN')
             
-        # Ensure Transaction Hash is treated as a string for grouping
+        # Ensure Transaction Hash is treated as a clean string for grouping
         if 'Transaction Hash' in df.columns:
-             df['Transaction Hash'] = df['Transaction Hash'].astype(str).fillna('')
+             df['Transaction Hash'] = df['Transaction Hash'].astype(str).str.strip().fillna('')
 
 
         # Add a Transaction Type column for the pivot table logic (Report 2)
@@ -135,79 +135,28 @@ else:
 
 # --- TRANSACTION GROUPING LOGIC (NEW FEATURE) ---
 if 'Transaction Hash' in df.columns:
-    # 1. Calculate the count of each transaction hash
-    hash_counts = df['Transaction Hash'].value_counts()
+    try:
+        # 1. Calculate the count of each transaction hash
+        hash_counts = df['Transaction Hash'].value_counts()
+        
+        # 2. Identify hashes that are part of a group (count > 1)
+        group_hashes = hash_counts[hash_counts > 1].index
+        
+        # 3. Create a mapping for Group IDs (assign 1, 2, 3... to multi-part hashes)
+        group_id_map = {hash_val: i + 1 for i, hash_val in enumerate(group_hashes)}
+        
+        # 4. Initialize new columns
+        df['Group Comment'] = "NOT a group transaction"
     
-    # 2. Identify hashes that are part of a group (count > 1)
-    group_hashes = hash_counts[hash_counts > 1].index
-    
-    # 3. Create a mapping for Group IDs (assign 1, 2, 3... to multi-part hashes)
-    group_id_map = {hash_val: i + 1 for i, hash_val in enumerate(group_hashes)}
-    
-    # 4. Initialize new columns
-    df['Group ID'] = np.nan
-    df['Group Comment'] = "NOT a group transaction"
+        # 5. Apply the Group ID mapping (this will assign NaNs to non-group hashes)
+        df['Group ID'] = df['Transaction Hash'].map(group_id_map)
+        
+        # 6. Apply the Group Comment
+        df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
+        
+        # 7. Final Safe Type Casting: Convert Group ID to a string for display, replacing NaN with empty string
+        # Using a temporary Series for safe conversion
+        df['Group ID'] = df['Group ID'].astype('Int64').fillna('').astype(str).replace('<NA>', '')
 
-    # 5. Apply the Group ID mapping and Group Comment
-    # Only map Group IDs for hashes that are actually in a group (count > 1)
-    df['Group ID'] = df['Transaction Hash'].map(group_id_map)
-    df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
-    
-    # Fill NaN Group IDs with a string representation for display (optional)
-    df['Group ID'] = df['Group ID'].apply(lambda x: int(x) if pd.notna(x) else '')
-
-else:
-    st.error("Cannot perform Transaction Grouping. Missing 'Transaction Hash' column.")
-
-
-# --- Main Report Tabs ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔍 Data Overview", 
-    "💸 Report 1: Currency Filter", 
-    "⚖️ Report 2: Net Flow & Fees", 
-    "💰 Report 3: Running Balance",
-    "📈 Suggested Analytics"
-])
-
-# =========================================================================
-# Tab 1: Data Overview
-# =========================================================================
-with tab1:
-    st.header("Dataset Summary")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total Transactions", f"{len(df):,}")
-    
-    if 'Timestamp' in df.columns and not df['Timestamp'].empty:
-        with col2:
-            st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
-        with col3:
-            st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
-    else:
-         with col2:
-            st.metric("Start Date", "N/A")
-         with col3:
-            st.metric("End Date", "N/A")
-
-    # --- DEBUGGING FEATURE: Check loaded columns ---
-    st.subheader("All Loaded Column Headers")
-    st.code(list(df.columns))
-    st.markdown("---")
-    
-    st.subheader("First 5 Rows of Data")
-    st.dataframe(df.head(), use_container_width=True)
-    
-    st.subheader("Column Information")
-    buffer = io.StringIO()
-    df.info(buf=buffer)
-    info_str = buffer.getvalue()
-    st.code(info_str, language='text')
-
-# =========================================================================
-# Tab 2: Report 1: Transactions by 'Original Currency Symbol'
-# =========================================================================
-with tab2:
-    st.header("Report 1: Filtered Transactions by Currency Symbol")
-    st.markdown("View all transaction details for a specific asset (Token
+    except Exception as e:
+        st.error(f"
