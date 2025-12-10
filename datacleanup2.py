@@ -196,4 +196,281 @@ with tab2:
         st.download_button(
             label=f"⬇️ Download {selected_currency} Transactions CSV",
             data=csv,
-            file
+            file_name=f'Report_1_Filtered_Transactions_{selected_currency}.csv',
+            mime='text/csv',
+        )
+
+# =========================================================================
+# Tab 3: Report 2: Net Flow, Outflow, and Fees Pivot Table
+# =========================================================================
+with tab3:
+    st.header("Report 2: Net Flow & Fees by Token (Pivot Table)")
+    st.markdown("Shows the aggregated **inflow, outflow, and fees** for each token based on the **Balance Impact (T)** column.")
+
+    if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
+        pivot_table = df.pivot_table(
+            values='Balance Impact (T)',
+            index='Original Currency Symbol',
+            columns='Transaction Type',
+            aggfunc='sum',
+            fill_value=0 
+        )
+
+        pivot_table['net_flow'] = pivot_table['inflow'] + pivot_table['outflow'] + pivot_table.get('fees', 0)
+        
+        pivot_table.columns = [col.replace('_', ' ').title() for col in pivot_table.columns]
+        pivot_table.rename(columns={'Net Flow': 'Net Flow (Balance Impact)'}, inplace=True)
+        
+        pivot_table = pivot_table.sort_values(by='Net Flow (Balance Impact)', ascending=False)
+        
+        st.dataframe(pivot_table, use_container_width=True)
+
+        # DOWNLOAD BUTTON (Report 2)
+        csv_pivot = pivot_table.to_csv().encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Net Flow & Fees Pivot Table CSV",
+            data=csv_pivot,
+            file_name='Report_2_Net_Flow_Fees_Pivot.csv',
+            mime='text/csv',
+        )
+        
+        st.subheader("Net Flow Visualization")
+        chart_df = pivot_table.reset_index()[['Original Currency Symbol', 'Net Flow (Balance Impact)']]
+        
+        chart = alt.Chart(chart_df).mark_bar().encode(
+            x=alt.X('Original Currency Symbol', sort='-y', axis=None), 
+            y=alt.Y('Net Flow (Balance Impact)', title="Net Balance Impact (T)"),
+            color=alt.condition(
+                alt.datum['Net Flow (Balance Impact)'] > 0,
+                alt.value("green"),
+                alt.value("red")
+            ),
+            tooltip=['Original Currency Symbol', alt.Tooltip('Net Flow (Balance Impact)', format=",.4f")]
+        ).properties(
+            title="Token Net Flow (Sorted)"
+        ).interactive()
+
+        st.altair_chart(chart, use_container_width=True)
+
+    else:
+        st.warning("Cannot generate Pivot Table. Check if 'Direction' and 'Balance Impact (T)' columns exist.")
+
+
+# =========================================================================
+# Tab 4: Report 3: Running Balance
+# =========================================================================
+with tab4:
+    st.header("Report 3: Token Running Balance")
+    st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**.")
+    
+    if 'Running Balance (T)' in df.columns and 'Timestamp' in df.columns:
+        rb_currency_options = df['Original Currency Symbol'].unique()
+        selected_rb_currency = st.selectbox(
+            "**Select a Token to view its Running Balance:**",
+            options=rb_currency_options,
+            key='rb_currency_filter' 
+        )
+
+        rb_filtered_df = df[df['Original Currency Symbol'] == selected_rb_currency].copy()
+        
+        st.subheader(f"Running Balance for: $\\text{{{selected_rb_currency}}}$ ({len(rb_filtered_df):,} transactions)")
+        
+        display_cols = [
+            'Timestamp', 
+            'Original Currency Symbol', 
+            'Direction', 
+            'Event Label',
+            'Balance Impact (T)', 
+            'Running Balance (T)',
+            'Total Fiat Amount ($)',
+            'From Address Name', 
+            'To Address Name'
+        ]
+        
+        final_display_cols = [col for col in display_cols if col in rb_filtered_df.columns]
+        
+        st.dataframe(rb_filtered_df[final_display_cols], use_container_width=True)
+
+        # DOWNLOAD BUTTON (Report 3)
+        csv_rb = rb_filtered_df[final_display_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"⬇️ Download Running Balance for {selected_rb_currency} CSV",
+            data=csv_rb,
+            file_name=f'Report_3_Running_Balance_{selected_rb_currency}.csv',
+            mime='text/csv',
+        )
+        
+        st.subheader("Running Balance Over Time")
+        
+        # --- FIX: Ensure data types are correct for Altair before charting ---
+        rb_chart_df = rb_filtered_df.copy()
+        rb_chart_df['Timestamp'] = pd.to_datetime(rb_chart_df['Timestamp'], errors='coerce')
+        rb_chart_df['Running Balance (T)'] = pd.to_numeric(rb_chart_df['Running Balance (T)'], errors='coerce')
+        rb_chart_df.dropna(subset=['Timestamp', 'Running Balance (T)'], inplace=True)
+        # --- END FIX ---
+        
+        rb_chart = alt.Chart(rb_chart_df).mark_line(point=True).encode(
+            x=alt.X('Timestamp', title='Date/Time'),
+            y=alt.Y('Running Balance (T)', title=f'Running Balance ({selected_rb_currency})'),
+            tooltip=['Timestamp', alt.Tooltip('Running Balance (T)', format=",.4f")]
+        ).properties(
+            title=f"Cumulative Balance of {selected_rb_currency}"
+        ).interactive()
+
+        st.altair_chart(rb_chart, use_container_width=True)
+        # Add visual context for time-series analysis
+        st.markdown("")
+    else:
+        st.error("Running Balance calculation failed. Please ensure 'Timestamp' and 'Balance Impact (T)' columns are present and data is numeric.")
+
+
+# =========================================================================
+# Tab 5: Suggested Reports
+# =========================================================================
+with tab5:
+    st.header("Suggested Analytics & Advanced Reports")
+
+    with st.expander("Report 4: Top 10 Largest Transactions (by Fiat Amount)", expanded=True):
+        st.markdown("Identifies the highest value transactions (inflow/outflow) based on **Total Fiat Amount ($)**.")
+        if 'Total Fiat Amount ($)' in df.columns:
+            top_transactions = df.iloc[(-df['Total Fiat Amount ($)'].abs()).argsort()[:10]].copy()
+            
+            # Formatting for display only
+            display_tx = top_transactions.copy()
+            display_tx['Total Fiat Amount ($)'] = display_tx['Total Fiat Amount ($)'].apply(
+                lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A"
+            )
+            
+            display_cols_tx = [
+                'Timestamp', 
+                'Original Currency Symbol', 
+                'Direction', 
+                'Total Fiat Amount ($)',
+                'Event Label',
+                'From Address Name', 
+                'To Address Name'
+            ]
+            
+            st.dataframe(
+                display_tx[[col for col in display_cols_tx if col in display_tx.columns]],
+                use_container_width=True
+            )
+
+            # DOWNLOAD BUTTON (Report 4)
+            csv_tx = top_transactions.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Top 10 Transactions CSV",
+                data=csv_tx,
+                file_name='Report_4_Top_10_Transactions.csv',
+                mime='text/csv',
+            )
+
+        else:
+            st.warning("Cannot generate Top Transactions report. 'Total Fiat Amount ($)' column is missing.")
+
+    st.markdown("---")
+
+    with st.expander("Report 5: Monthly Transaction Volume", expanded=True):
+        st.markdown("Visualizes transaction count and total fiat value over time.")
+        
+        if 'Timestamp' in df.columns and 'Total Fiat Amount ($)' in df.columns:
+            try:
+                monthly_data = df.set_index('Timestamp').resample('M').agg(
+                    transaction_count=('Timestamp', 'size'),
+                    total_fiat_value=('Total Fiat Amount ($)', 'sum')
+                ).reset_index()
+                
+                monthly_data['Month'] = monthly_data['Timestamp'].dt.to_period('M').astype(str)
+
+                # Display table
+                display_monthly = monthly_data[['Month', 'transaction_count', 'total_fiat_value']].rename(
+                    columns={
+                        'transaction_count': 'Transaction Count',
+                        'total_fiat_value': 'Total Fiat Value ($)'
+                    }
+                )
+                st.dataframe(display_monthly, use_container_width=True)
+
+                # DOWNLOAD BUTTON (Report 5)
+                csv_monthly = monthly_data.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="⬇️ Download Monthly Volume Data CSV",
+                    data=csv_monthly,
+                    file_name='Report_5_Monthly_Volume.csv',
+                    mime='text/csv',
+                )
+                
+                # Chart view
+                base = alt.Chart(monthly_data).encode(x=alt.X('Month:O', title='Month'))
+                
+                line_count = base.mark_line(color='steelblue').encode(
+                    y=alt.Y('transaction_count', title='Transaction Count', axis=alt.Axis(titleColor='steelblue')),
+                    tooltip=['Month:O', 'transaction_count']
+                )
+                
+                bar_value = base.mark_bar(opacity=0.5).encode(
+                    y=alt.Y('total_fiat_value', title='Total Fiat Value ($)', axis=alt.Axis(titleColor='orange')),
+                    color=alt.value("orange"),
+                    tooltip=['Month:O', alt.Tooltip('total_fiat_value', format="$,.2f")]
+                )
+                
+                st.altair_chart(line_count + bar_value, use_container_width=True)
+
+            except Exception as e:
+                st.warning(f"Error generating Monthly Volume: {e}")
+        else:
+            st.warning("Cannot generate Monthly Volume report. 'Timestamp' or 'Total Fiat Amount ($)' columns are missing.")
+            
+    st.markdown("---")
+
+    with st.expander("Report 6: Top 10 Counterparties (By Count)"):
+        st.markdown("Identifies the most frequent counterparties involved in your transactions, based on relevant address columns.")
+        
+        counterparty_col = next((col for col in df.columns if '3rd Party' in col or 'To Address' in col or 'From Address' in col), None)
+
+        if counterparty_col:
+            top_counterparties = df[counterparty_col].value_counts().head(10).reset_index()
+            top_counterparties.columns = [counterparty_col, 'Transaction Count']
+            
+            st.dataframe(top_counterparties, use_container_width=True)
+
+            # DOWNLOAD BUTTON (Report 6)
+            csv_cp = top_counterparties.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Top Counterparties CSV",
+                data=csv_cp,
+                file_name='Report_6_Top_Counterparties.csv',
+                mime='text/csv',
+            )
+            
+            # Chart view
+            chart_cp = alt.Chart(top_counterparties).mark_bar().encode(
+                x=alt.X('Transaction Count'),
+                y=alt.Y(counterparty_col, sort='-x', title='Counterparty Address/Name'),
+                tooltip=[counterparty_col, 'Transaction Count']
+            ).properties(
+                title="Top 10 Counterparties by Transaction Count"
+            )
+            st.altair_chart(chart_cp, use_container_width=True)
+        else:
+            st.warning("Cannot generate Counterparties report. A '3rd Party' or 'Address' column is missing or not identifiable.")
+
+# -------------------------------------------------------------------------
+# --- How to Run Section (in sidebar) ---
+# -------------------------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    """
+    ### ⚙️ How to Run This App
+
+    1.  **Install Libraries (Crucial Step!):**
+        ```bash
+        pip install streamlit pandas numpy altair
+        ```
+    2.  **Save the code** above as a file named `app.py`.
+    3.  **Run the command** in your terminal:
+        ```bash
+        streamlit run app.py
+        ```
+    """
+)
