@@ -39,11 +39,15 @@ def load_data(uploaded_file):
         
         for col in numeric_cols:
             if col in df.columns:
-                # 1. Clean up currency formatting
-                cleaned_data = df[col].astype(str).str.replace(r'[$,]', '', regex=True)
-                
-                # 2. Force conversion to float, coercing errors to NaN
-                df[col] = pd.to_numeric(cleaned_data, errors='coerce')
+                try:
+                    # 1. Clean up currency formatting
+                    cleaned_data = df[col].astype(str).str.replace(r'[$,]', '', regex=True)
+                    
+                    # 2. Force conversion to float, coercing errors to NaN
+                    df[col] = pd.to_numeric(cleaned_data, errors='coerce')
+                except Exception as e:
+                    st.warning(f"Warning: Could not convert numeric column '{col}'. Data may be inaccurate.")
+                    df[col] = 0.0 # Default to 0.0 on severe failure
         
         # --- CRITICAL FIX FOR RUNNING BALANCE (Report 3) ---
         if 'Balance Impact (T)' in df.columns:
@@ -80,8 +84,7 @@ def load_data(uploaded_file):
 
         return df
     except Exception as e:
-        st.error(f"Error loading or processing file: {e}")
-        st.error("Please check that your column headers (like 'Balance Impact (T)', 'Total Fiat Amount ($)', etc.) match exactly.")
+        st.error(f"FATAL: Error loading CSV file. Please ensure the file is a valid CSV and not corrupted. Error: {e}")
         return pd.DataFrame() 
 
 
@@ -116,21 +119,27 @@ if df.empty:
 # --- CORE DATA PROCESSING (Running Balance and Grouping Calculations) ---
 # =========================================================================
 
-# Check both key columns for Running Balance
-if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
-    # 1. Sort by Timestamp (ascending A to Z) as requested
-    df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
+# --- RUNNING BALANCE CALCULATION ---
+try:
+    if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
+        # 1. Sort by Timestamp (ascending A to Z) as requested
+        df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
 
-    # 2. Calculate Running Balance for each Token
-    df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
+        # 2. Calculate Running Balance for each Token
+        df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
 
-    # 3. Create Status Column for Negative Balances
-    df['Balance Status'] = df['Running Balance (T)'].apply(
-        lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
-    )
-
-else:
-    st.error("Cannot calculate Running Balance. Missing 'Timestamp' or 'Balance Impact (T)' column. Check Tab 1 for loaded column names.")
+        # 3. Create Status Column for Negative Balances
+        df['Balance Status'] = df['Running Balance (T)'].apply(
+            lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
+        )
+    else:
+        st.warning("Running Balance features disabled: Missing 'Timestamp' or 'Balance Impact (T)' column.")
+        df['Running Balance (T)'] = np.nan
+        df['Balance Status'] = "Feature Disabled"
+except Exception as e:
+    st.error(f"CRITICAL ERROR: Running Balance calculation failed. Error: {e}")
+    df['Running Balance (T)'] = np.nan
+    df['Balance Status'] = "Calculation Failed"
 
 
 # --- TRANSACTION GROUPING LOGIC ---
@@ -154,26 +163,27 @@ if 'Transaction Hash' in df.columns:
         # 6. Apply the Group Comment
         df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
         
-        # 7. Final Safe Type Casting: Convert to string, replacing NaN-assigned 0s with empty string
+        # 7. Final Safe Type Casting
         df['Group ID'] = df['Group ID'].fillna(0).astype(int).astype(str).replace('0', '')
         
     except Exception as e:
-        st.error(f"Error during Transaction Grouping logic: {e}")
-        st.error("Please check the consistency and data types of your 'Transaction Hash' column.")
-        df['Group ID'] = ''
+        st.error(f"CRITICAL ERROR: Transaction Grouping failed. Error: {e}")
+        df['Group ID'] = 'Failed'
         df['Group Comment'] = 'Grouping Failed'
 
 else:
-    st.error("Cannot perform Transaction Grouping. Missing 'Transaction Hash' column.")
+    st.warning("Transaction Grouping features disabled: Missing 'Transaction Hash' column.")
+    df['Group ID'] = 'Disabled'
+    df['Group Comment'] = 'Feature Disabled'
 
 
-# --- Main Report Tabs (Updated to 6 tabs for the new dedicated report) ---
+# --- Main Report Tabs ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🔍 Data Overview", 
     "💸 Report 1: Currency Filter", 
     "⚖️ Report 2: Net Flow & Fees", 
     "💰 Report 3: Running Balance",
-    "🔗 Report 4: Transaction Grouping", # NEW DEDICATED TAB
+    "🔗 Report 4: Transaction Grouping",
     "📈 Suggested Analytics"
 ])
 
@@ -190,15 +200,7 @@ with tab1:
     
     if 'Timestamp' in df.columns and not df['Timestamp'].empty:
         with col2:
-            st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
-        with col3:
-            st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
-    else:
-         with col2:
-            st.metric("Start Date", "N/A")
-         with col3:
-            st.metric("End Date", "N/A")
-
-    # --- DEBUGGING FEATURE: Check loaded columns ---
-    st.subheader("All Loaded Column Headers")
-    st.
+            try:
+                st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
+            except ValueError: # Handle NaT/all invalid dates
+                 st.metric("
