@@ -20,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
-# --- Helper Function for Debugging Conversion Failures ---
+# --- Helper Function for Debugging Conversion Failures (Still retained for safety) ---
 def safe_to_numeric(series, column_name):
     """Converts series to numeric and returns indices where conversion failed."""
     
@@ -37,15 +37,15 @@ def safe_to_numeric(series, column_name):
     failed_indices = [idx for idx in failed_indices if cleaned_series.loc[idx].strip() != '']
     
     if failed_indices:
-        st.error(
-            f"❌ Data Error in '{column_name}': Failed to convert non-empty data to number at rows: {failed_indices[:5]}... "
-            f"Please check these rows in your original CSV."
+        st.warning(
+            f"⚠️ Data Warning in '{column_name}': Non-empty data failed conversion at rows: {failed_indices[:5]}... "
+            f"Using 0.0 for these values."
         )
     
     return numeric_series.fillna(0) # Return the converted series (fill NaN with 0 for calculation safety)
 
 
-# --- Helper Function to Load Data ---
+# --- Helper Function to Load Data (QA Checkpoint 1: Data Integrity) ---
 @st.cache_data
 def load_data(uploaded_file):
     """Loads CSV data into a DataFrame using the file buffer and performs initial cleaning."""
@@ -58,7 +58,7 @@ def load_data(uploaded_file):
         # Standardize column names by stripping whitespace
         df.columns = df.columns.str.strip()
         
-        # --- Data Cleaning and Type Conversion (Using the new safe function) ---
+        # --- Data Cleaning and Type Conversion ---
         numeric_cols = [
             'Transfer Unit Fiat Price ($)', 
             'Balance Impact (T)', 
@@ -67,12 +67,11 @@ def load_data(uploaded_file):
         
         for col in numeric_cols:
             if col in df.columns:
-                # Use the debugging function for critical columns
                 df[col] = safe_to_numeric(df[col], col)
         
         # --- CRITICAL FIX FOR RUNNING BALANCE (Report 3) ---
         if 'Balance Impact (T)' in df.columns:
-            # Re-cast as float64, using the cleaned series from above (which fills NaN/fails with 0)
+            # Re-cast as float64, using the cleaned series (which fills NaN/fails with 0)
             df['Balance Impact (T)'] = df['Balance Impact (T)'].astype(np.float64)
 
         # Fill NaN in 'Original Currency Symbol'
@@ -101,7 +100,11 @@ def load_data(uploaded_file):
         # Ensure Timestamp is datetime for sorting and plotting
         if 'Timestamp' in df.columns:
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            # Critical: Sort by time now to ensure running balance is correct
+            
+            # --- FINAL STABILITY FIX: Remove rows where Timestamp is unparseable ---
+            df.dropna(subset=['Timestamp'], inplace=True)
+            
+            # Critical: Sort by time now to ensure running balance is correct before any logic runs
             df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
 
         return df
@@ -141,10 +144,13 @@ if df.empty:
 # --- CORE DATA PROCESSING (Running Balance and Grouping Calculations) ---
 # =========================================================================
 
-# --- RUNNING BALANCE CALCULATION ---
+# --- RUNNING BALANCE CALCULATION (QA Checkpoint 2: Feature Stability) ---
 try:
     if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
         
+        # Re-cast to numeric right before cumsum for maximum robustness 
+        df['Balance Impact (T)'] = pd.to_numeric(df['Balance Impact (T)'], errors='coerce').fillna(0)
+
         # 1. Calculate Running Balance for each Token
         df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
 
@@ -162,7 +168,7 @@ except Exception as e:
     df['Balance Status'] = "Calculation Failed"
 
 
-# --- TRANSACTION GROUPING LOGIC ---
+# --- TRANSACTION GROUPING LOGIC (QA Checkpoint 3: Feature Stability) ---
 if 'Transaction Hash' in df.columns:
     try:
         # 1. Calculate the count of each transaction hash
@@ -214,7 +220,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 # =========================================================================
-# Tab 1: Data Overview
+# Tab 1: Data Overview (QA Checkpoint 4: Column Verification)
 # =========================================================================
 with tab1:
     st.header("Dataset Summary")
@@ -272,3 +278,142 @@ with tab2:
     selected_currency = st.selectbox(
         "**Select an 'Original Currency Symbol' to filter:**",
         options=currency_options,
+        index=0,
+        key='currency_filter' 
+    )
+    
+    if selected_currency:
+        filtered_df = df[df['Original Currency Symbol'] == selected_currency].copy()
+        
+        st.subheader(f"All {len(filtered_df):,} transactions for: $\\text{{{selected_currency}}}$")
+        
+        # Display columns (EXCLUDING Group ID/Comment/Running Balance)
+        display_cols = [
+            'Timestamp', 
+            'Original Currency Symbol', 
+            'Direction', 
+            'Event Label',
+            'Balance Impact (T)', 
+            'Transaction Hash', 
+            'Total Fiat Amount ($)',
+            'From Address Name', 
+            'To Address Name'
+        ]
+        final_display_cols = [col for col in display_cols if col in filtered_df.columns]
+        st.dataframe(filtered_df[final_display_cols], width='stretch')
+        
+        # DOWNLOAD BUTTON (Report 1)
+        csv = filtered_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"⬇️ Download {selected_currency} Transactions CSV",
+            data=csv,
+            file_name=f'Report_1_Filtered_Transactions_{selected_currency}.csv',
+            mime='text/csv',
+        )
+
+# =========================================================================
+# Tab 3: Report 2: Net Flow, Outflow, and Fees Pivot Table
+# =========================================================================
+with tab3:
+    st.header("Report 2: Net Flow & Fees by Token (Pivot Table)")
+    st.markdown("Shows the aggregated **inflow, outflow, and fees** for each token based on the **Balance Impact (T)** column.")
+
+    if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
+        pivot_table = df.pivot_table(
+            values='Balance Impact (T)',
+            index='Original Currency Symbol',
+            columns='Transaction Type',
+            aggfunc='sum',
+            fill_value=0 
+        )
+
+        pivot_table['net_flow'] = pivot_table['inflow'] + pivot_table['outflow'] + pivot_table.get('fees', 0)
+        
+        pivot_table.columns = [col.replace('_', ' ').title() for col in pivot_table.columns]
+        pivot_table.rename(columns={'Net Flow': 'Net Flow (Balance Impact)'}, inplace=True)
+        
+        pivot_table = pivot_table.sort_values(by='Net Flow (Balance Impact)', ascending=False)
+        
+        st.dataframe(pivot_table, width='stretch')
+
+        # DOWNLOAD BUTTON (Report 2)
+        csv_pivot = pivot_table.to_csv().encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Net Flow & Fees Pivot Table CSV",
+            data=csv_pivot,
+            file_name='Report_2_Net_Flow_Fees_Pivot.csv',
+            mime='text/csv',
+        )
+        
+        st.subheader("Net Flow Visualization")
+        chart_df = pivot_table.reset_index()[['Original Currency Symbol', 'Net Flow (Balance Impact)']]
+        
+        chart = alt.Chart(chart_df).mark_bar().encode(
+            x=alt.X('Original Currency Symbol', sort='-y', axis=None), 
+            y=alt.Y('Net Flow (Balance Impact)', title="Net Balance Impact (T)"),
+            color=alt.condition(
+                alt.datum['Net Flow (Balance Impact)'] > 0,
+                alt.value("green"),
+                alt.value("red")
+            ),
+            tooltip=['Original Currency Symbol', alt.Tooltip('Net Flow (Balance Impact)', format=",.4f")]
+        ).properties(
+            title="Token Net Flow (Sorted)"
+        ).interactive()
+
+        st.altair_chart(chart, width='stretch')
+
+    else:
+        st.warning("Cannot generate Pivot Table. Check if 'Direction' and 'Balance Impact (T)' columns exist.")
+
+
+# =========================================================================
+# Tab 4: Report 3: Running Balance (EXCLUDING Grouping)
+# =========================================================================
+with tab4:
+    st.header("Report 3: Token Running Balance")
+    st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**. Includes a **`Balance Status`** warning.")
+    
+    if 'Running Balance (T)' in df.columns and df['Running Balance (T)'].notna().any():
+        rb_currency_options = df['Original Currency Symbol'].unique()
+        selected_rb_currency = st.selectbox(
+            "**Select a Token to view its Running Balance:**",
+            options=rb_currency_options,
+            key='rb_currency_filter' 
+        )
+
+        rb_filtered_df = df[df['Original Currency Symbol'] == selected_rb_currency].copy()
+        
+        st.subheader(f"Running Balance for: $\\text{{{selected_rb_currency}}}$ ({len(rb_filtered_df):,} transactions)")
+        
+        # Display columns (EXCLUDING Group ID/Comment)
+        display_cols = [
+            'Timestamp', 
+            'Original Currency Symbol', 
+            'Direction', 
+            'Event Label',
+            'Balance Impact (T)', 
+            'Running Balance (T)',
+            'Balance Status', 
+            'Transaction Hash',
+            'Total Fiat Amount ($)',
+            'From Address Name', 
+            'To Address Name'
+        ]
+        
+        final_display_cols = [col for col in display_cols if col in rb_filtered_df.columns]
+        st.dataframe(rb_filtered_df[final_display_cols], width='stretch')
+
+        # DOWNLOAD BUTTON (Report 3)
+        csv_rb = rb_filtered_df[final_display_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"⬇️ Download Running Balance for {selected_rb_currency} CSV",
+            data=csv_rb,
+            file_name=f'Report_3_Running_Balance_{selected_rb_currency}.csv',
+            mime='text/csv',
+        )
+        
+        st.subheader("Running Balance Over Time")
+        
+        # Ensure data types are correct for Altair before charting
+        rb_chart_df = rb_filtered_df.copy
