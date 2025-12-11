@@ -156,7 +156,7 @@ with tab1:
         with col3:
             st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
     else:
-        # **Indentation Fix Applied Here**
+        # Indentation Fix Applied Here
         with col2:
             st.metric("Start Date", "N/A")
         with col3:
@@ -181,4 +181,7 @@ with tab1:
 # =========================================================================
 with tab2:
     st.header("Report 1: Filtered Transactions by Currency Symbol")
-    st.markdown("View all transaction details for a specific asset
+    # FIX: Ensure this string literal is closed correctly on one line
+    st.markdown("View all transaction details for a specific asset (Token Filter).")
+    
+    currency_options = df['Original Currency Symbol'].unique()
