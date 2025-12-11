@@ -23,9 +23,13 @@ st.set_page_config(
 # --- Helper Function to Load Data ---
 @st.cache_data
 def load_data(uploaded_file):
-    """Loads CSV data into a DataFrame and performs initial cleaning."""
+    """Loads CSV data into a DataFrame using the file buffer and performs initial cleaning."""
     try:
-        df = pd.read_csv(uploaded_file)
+        # --- ROBUST FILE READING FIX ---
+        # Read the file directly into a StringIO buffer
+        stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
+        df = pd.read_csv(stringio)
+        # --- END FIX ---
         
         # Standardize column names by stripping whitespace
         df.columns = df.columns.str.strip()
@@ -45,9 +49,9 @@ def load_data(uploaded_file):
                     
                     # 2. Force conversion to float, coercing errors to NaN
                     df[col] = pd.to_numeric(cleaned_data, errors='coerce')
-                except Exception as e:
-                    st.warning(f"Warning: Could not convert numeric column '{col}'. Data may be inaccurate.")
-                    df[col] = 0.0 # Default to 0.0 on severe failure
+                except Exception:
+                    st.warning(f"Warning: Could not convert numeric column '{col}'. Defaulting to 0.0 on severe failure.")
+                    df[col] = 0.0
         
         # --- CRITICAL FIX FOR RUNNING BALANCE (Report 3) ---
         if 'Balance Impact (T)' in df.columns:
@@ -202,5 +206,83 @@ with tab1:
         with col2:
             try:
                 st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
-            except ValueError: # Handle NaT/all invalid dates
-                 st.metric("
+            except ValueError:
+                 st.metric("Start Date", "N/A (Invalid Dates)")
+        with col3:
+            try:
+                st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
+            except ValueError:
+                 st.metric("End Date", "N/A (Invalid Dates)")
+    else:
+         with col2:
+            st.metric("Start Date", "N/A")
+         with col3:
+            st.metric("End Date", "N/A")
+
+    # --- DEBUGGING FEATURE: Check loaded columns ---
+    st.subheader("All Loaded Column Headers")
+    st.code(list(df.columns))
+    st.markdown("---")
+    
+    st.subheader("First 5 Rows of Data")
+    st.dataframe(df.head(), width='stretch')
+    
+    st.subheader("Column Information")
+    buffer = io.StringIO()
+    df.info(buf=buffer)
+    info_str = buffer.getvalue()
+    st.code(info_str, language='text')
+
+# =========================================================================
+# Tab 2: Report 1: Transactions by 'Original Currency Symbol'
+# =========================================================================
+with tab2:
+    st.header("Report 1: Filtered Transactions by Currency Symbol")
+    st.markdown("View all transaction details for a specific asset (Token Filter).")
+    
+    currency_options = df['Original Currency Symbol'].unique()
+    
+    selected_currency = st.selectbox(
+        "**Select an 'Original Currency Symbol' to filter:**",
+        options=currency_options,
+        index=0,
+        key='currency_filter' 
+    )
+    
+    if selected_currency:
+        filtered_df = df[df['Original Currency Symbol'] == selected_currency].copy()
+        
+        st.subheader(f"All {len(filtered_df):,} transactions for: $\\text{{{selected_currency}}}$")
+        
+        # Display columns (EXCLUDING Group ID/Comment/Running Balance)
+        display_cols = [
+            'Timestamp', 
+            'Original Currency Symbol', 
+            'Direction', 
+            'Event Label',
+            'Balance Impact (T)', 
+            'Transaction Hash', 
+            'Total Fiat Amount ($)',
+            'From Address Name', 
+            'To Address Name'
+        ]
+        final_display_cols = [col for col in display_cols if col in filtered_df.columns]
+        st.dataframe(filtered_df[final_display_cols], width='stretch')
+        
+        # DOWNLOAD BUTTON (Report 1)
+        csv = filtered_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"⬇️ Download {selected_currency} Transactions CSV",
+            data=csv,
+            file_name=f'Report_1_Filtered_Transactions_{selected_currency}.csv',
+            mime='text/csv',
+        )
+
+# =========================================================================
+# Tab 3: Report 2: Net Flow, Outflow, and Fees Pivot Table
+# =========================================================================
+with tab3:
+    st.header("Report 2: Net Flow & Fees by Token (Pivot Table)")
+    st.markdown("Shows the aggregated **inflow, outflow, and fees** for each token based on the **Balance Impact (T)** column.")
+
+    if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.
