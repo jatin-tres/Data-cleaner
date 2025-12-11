@@ -65,6 +65,7 @@ def load_data(uploaded_file):
         if 'Transaction Hash' in df.columns:
              df['Transaction Hash'] = df['Transaction Hash'].astype(str).str.strip().fillna('')
 
+
         # Add a Transaction Type column for the pivot table logic (Report 2)
         if 'Direction' in df.columns and 'Event Label' in df.columns:
             def categorize_transaction(row):
@@ -80,12 +81,9 @@ def load_data(uploaded_file):
             
             df['Transaction Type'] = df.apply(categorize_transaction, axis=1)
             
-        # --- FINAL FIX FOR TIMESTAMP STABILITY ---
+        # Ensure Timestamp is datetime for sorting and plotting
         if 'Timestamp' in df.columns:
-            # Convert to datetime, coercing errors to NaT
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            # Critical: Sort by time now to ensure running balance is correct before any grouping logic runs
-            df = df.sort_values(by='Timestamp', ascending=True)
 
         return df
     except Exception as e:
@@ -127,7 +125,8 @@ if df.empty:
 # --- RUNNING BALANCE CALCULATION ---
 try:
     if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
-        # Note: Sorting by Timestamp is now done inside load_data for cache efficiency
+        # Sort by Timestamp for correct running balance
+        df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
 
         # 1. Calculate Running Balance for each Token
         df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
@@ -153,22 +152,28 @@ if 'Transaction Hash' in df.columns:
         hash_counts = df['Transaction Hash'].value_counts()
         
         # 2. Identify hashes that are part of a group (count > 1)
+        # FIX: Check if group_hashes is not empty before proceeding
         group_hashes = hash_counts[hash_counts > 1].index
         
-        # 3. Create a mapping for Group IDs (assign 1, 2, 3... to multi-part hashes)
-        group_id_map = {hash_val: i + 1 for i, hash_val in enumerate(group_hashes)}
+        if len(group_hashes) > 0:
+            # 3. Create a mapping for Group IDs (assign 1, 2, 3... to multi-part hashes)
+            group_id_map = {hash_val: i + 1 for i, hash_val in enumerate(group_hashes)}
+            
+            # 4. Initialize new columns
+            df['Group Comment'] = "NOT a group transaction"
         
-        # 4. Initialize new columns
-        df['Group Comment'] = "NOT a group transaction"
-    
-        # 5. Apply the Group ID mapping (this will assign NaNs to non-group hashes)
-        df['Group ID'] = df['Transaction Hash'].map(group_id_map)
-        
-        # 6. Apply the Group Comment
-        df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
-        
-        # 7. Final Safe Type Casting
-        df['Group ID'] = df['Group ID'].fillna(0).astype(int).astype(str).replace('0', '')
+            # 5. Apply the Group ID mapping
+            df['Group ID'] = df['Transaction Hash'].map(group_id_map)
+            
+            # 6. Apply the Group Comment
+            df.loc[df['Group ID'].notna(), 'Group Comment'] = "Group Transaction"
+            
+            # 7. Final Safe Type Casting
+            df['Group ID'] = df['Group ID'].fillna(0).astype(int).astype(str).replace('0', '')
+        else:
+            df['Group ID'] = ''
+            df['Group Comment'] = 'NOT a group transaction'
+            st.info("Transaction Grouping is available, but no multi-part transactions were found (all hashes occurred only once).")
         
     except Exception as e:
         st.error(f"CRITICAL ERROR: Transaction Grouping failed. Error: {e}")
@@ -232,6 +237,10 @@ with tab1:
     df.info(buf=buffer)
     info_str = buffer.getvalue()
     st.code(info_str, language='text')
+    
+    st.markdown("---")
+    st.markdown("If any reports are blank, please check the headers above match the required headers exactly:")
+    st.code("['Timestamp', 'Balance Impact (T)', 'Transaction Hash', 'Total Fiat Amount ($)', 'Original Currency Symbol']")
 
 # =========================================================================
 # Tab 2: Report 1: Transactions by 'Original Currency Symbol'
@@ -311,3 +320,216 @@ with tab3:
             file_name='Report_2_Net_Flow_Fees_Pivot.csv',
             mime='text/csv',
         )
+        
+        st.subheader("Net Flow Visualization")
+        chart_df = pivot_table.reset_index()[['Original Currency Symbol', 'Net Flow (Balance Impact)']]
+        
+        chart = alt.Chart(chart_df).mark_bar().encode(
+            x=alt.X('Original Currency Symbol', sort='-y', axis=None), 
+            y=alt.Y('Net Flow (Balance Impact)', title="Net Balance Impact (T)"),
+            color=alt.condition(
+                alt.datum['Net Flow (Balance Impact)'] > 0,
+                alt.value("green"),
+                alt.value("red")
+            ),
+            tooltip=['Original Currency Symbol', alt.Tooltip('Net Flow (Balance Impact)', format=",.4f")]
+        ).properties(
+            title="Token Net Flow (Sorted)"
+        ).interactive()
+
+        st.altair_chart(chart, width='stretch')
+
+    else:
+        st.warning("Cannot generate Pivot Table. Check if 'Direction' and 'Balance Impact (T)' columns exist.")
+
+
+# =========================================================================
+# Tab 4: Report 3: Running Balance (EXCLUDING Grouping)
+# =========================================================================
+with tab4:
+    st.header("Report 3: Token Running Balance")
+    st.markdown("Displays the **cumulative balance (net asset holdings)** for a selected token, sorted by **Timestamp**. Includes a **`Balance Status`** warning.")
+    
+    if 'Running Balance (T)' in df.columns and df['Running Balance (T)'].notna().any():
+        rb_currency_options = df['Original Currency Symbol'].unique()
+        selected_rb_currency = st.selectbox(
+            "**Select a Token to view its Running Balance:**",
+            options=rb_currency_options,
+            key='rb_currency_filter' 
+        )
+
+        rb_filtered_df = df[df['Original Currency Symbol'] == selected_rb_currency].copy()
+        
+        st.subheader(f"Running Balance for: $\\text{{{selected_rb_currency}}}$ ({len(rb_filtered_df):,} transactions)")
+        
+        # Display columns (EXCLUDING Group ID/Comment)
+        display_cols = [
+            'Timestamp', 
+            'Original Currency Symbol', 
+            'Direction', 
+            'Event Label',
+            'Balance Impact (T)', 
+            'Running Balance (T)',
+            'Balance Status', 
+            'Transaction Hash',
+            'Total Fiat Amount ($)',
+            'From Address Name', 
+            'To Address Name'
+        ]
+        
+        final_display_cols = [col for col in display_cols if col in rb_filtered_df.columns]
+        st.dataframe(rb_filtered_df[final_display_cols], width='stretch')
+
+        # DOWNLOAD BUTTON (Report 3)
+        csv_rb = rb_filtered_df[final_display_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"⬇️ Download Running Balance for {selected_rb_currency} CSV",
+            data=csv_rb,
+            file_name=f'Report_3_Running_Balance_{selected_rb_currency}.csv',
+            mime='text/csv',
+        )
+        
+        st.subheader("Running Balance Over Time")
+        
+        # Ensure data types are correct for Altair before charting
+        rb_chart_df = rb_filtered_df.copy()
+        rb_chart_df['Timestamp'] = pd.to_datetime(rb_chart_df['Timestamp'], errors='coerce')
+        rb_chart_df['Running Balance (T)'] = pd.to_numeric(rb_chart_df['Running Balance (T)'], errors='coerce')
+        rb_chart_df.dropna(subset=['Timestamp', 'Running Balance (T)'], inplace=True)
+        
+        rb_chart = alt.Chart(rb_chart_df).mark_line(point=True).encode(
+            x=alt.X('Timestamp', title='Date/Time'),
+            y=alt.Y('Running Balance (T)', title=f'Running Balance ({selected_rb_currency})'),
+            tooltip=['Timestamp', alt.Tooltip('Running Balance (T)', format=",.4f")]
+        ).properties(
+            title=f"Cumulative Balance of {selected_rb_currency}"
+        ).interactive()
+
+        st.altair_chart(rb_chart, width='stretch')
+        # Trigger image for conceptual clarity on running balance
+        st.markdown("[Image of a time series chart illustrating cumulative balance over time]")
+    else:
+        st.error("Running Balance calculation failed. Please ensure 'Timestamp' and 'Balance Impact (T)' columns are correct.")
+
+
+# =========================================================================
+# Tab 5: Report 4: Transaction Grouping (NEW DEDICATED REPORT)
+# =========================================================================
+with tab5:
+    st.header("Report 4: Transaction Grouping Analysis")
+    st.markdown("""
+        Identifies related transaction legs (e.g., Inflow, Outflow, Fee) that share the same **Transaction Hash**.
+        Transactions with a `Group ID` are multi-part ("Group Transaction"). Single transactions are not grouped.
+    """)
+    
+    if 'Transaction Hash' in df.columns and 'Group ID' in df.columns and df['Transaction Hash'].any():
+        
+        # Filter option: Show only grouped transactions, or all
+        group_filter = st.radio(
+            "Filter Transactions:",
+            ('All Transactions', 'Show ONLY Grouped Transactions'),
+            key='group_radio'
+        )
+        
+        if group_filter == 'Show ONLY Grouped Transactions':
+            grouped_df = df[df['Group Comment'] == 'Group Transaction'].copy()
+            st.info(f"Displaying {len(grouped_df):,} transactions belonging to a group.")
+        else:
+            grouped_df = df.copy()
+        
+        # Display columns for the grouping report
+        display_cols = [
+            'Group ID',
+            'Group Comment',
+            'Transaction Hash', 
+            'Timestamp', 
+            'Direction', 
+            'Original Currency Symbol', 
+            'Balance Impact (T)',
+            'Total Fiat Amount ($)',
+            'Event Label',
+        ]
+        
+        final_display_cols = [col for col in display_cols if col in grouped_df.columns]
+        
+        st.dataframe(grouped_df[final_display_cols], width='stretch')
+
+        # DOWNLOAD BUTTON (Report 4)
+        csv_grouped = grouped_df[final_display_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Transaction Grouping Data CSV",
+            data=csv_grouped,
+            file_name='Report_4_Transaction_Grouping.csv',
+            mime='text/csv',
+        )
+        
+    else:
+        st.error("Transaction Grouping is unavailable. Missing 'Transaction Hash' column or data.")
+
+
+# =========================================================================
+# Tab 6: Suggested Reports (Reports 5, 6, 7)
+# =========================================================================
+with tab6:
+    st.header("Suggested Analytics & Advanced Reports")
+
+    with st.expander("Report 5: Top 10 Largest Transactions (by Fiat Amount)", expanded=True):
+        st.markdown("Identifies the highest value transactions (inflow/outflow) based on **Total Fiat Amount ($)**.")
+        if 'Total Fiat Amount ($)' in df.columns:
+            top_transactions = df.iloc[(-df['Total Fiat Amount ($)'].abs()).argsort()[:10]].copy()
+            
+            # Formatting for display only
+            display_tx = top_transactions.copy()
+            display_tx['Total Fiat Amount ($)'] = display_tx['Total Fiat Amount ($)'].apply(
+                lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A"
+            )
+            
+            display_cols_tx = [
+                'Timestamp', 
+                'Original Currency Symbol', 
+                'Direction', 
+                'Total Fiat Amount ($)',
+                'Event Label',
+                'From Address Name', 
+                'To Address Name'
+            ]
+            
+            st.dataframe(
+                display_tx[[col for col in display_cols_tx if col in display_tx.columns]],
+                width='stretch'
+            )
+
+            # DOWNLOAD BUTTON (Report 5)
+            csv_tx = top_transactions.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Top 10 Transactions CSV",
+                data=csv_tx,
+                file_name='Report_5_Top_10_Transactions.csv',
+                mime='text/csv',
+            )
+
+        else:
+            st.warning("Cannot generate Top Transactions report. 'Total Fiat Amount ($)' column is missing.")
+
+    st.markdown("---")
+
+    with st.expander("Report 6: Monthly Transaction Volume", expanded=True):
+        st.markdown("Visualizes transaction count and total fiat value over time.")
+        
+        if 'Timestamp' in df.columns and 'Total Fiat Amount ($)' in df.columns:
+            try:
+                # Create a temporary DataFrame and filter out NaT before resampling
+                temp_df = df[['Timestamp', 'Total Fiat Amount ($)']].dropna(subset=['Timestamp']).copy()
+                
+                monthly_data = temp_df.set_index('Timestamp').resample('M').agg(
+                    transaction_count=('Timestamp', 'size'),
+                    total_fiat_value=('Total Fiat Amount ($)', 'sum')
+                ).reset_index()
+                
+                monthly_data['Month'] = monthly_data['Timestamp'].dt.to_period('M').astype(str)
+
+                # Display table
+                display_monthly = monthly_data[['Month', 'transaction_count', 'total_fiat_value']].rename(
+                    columns={
+                        'transaction_count': 'Transaction Count',
+                        'total_fiat_value': '
