@@ -154,3 +154,31 @@ with tab1:
         with col2:
             st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
         with col3:
+            st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
+    else:
+        # **Indentation Fix Applied Here**
+        with col2:
+            st.metric("Start Date", "N/A")
+        with col3:
+            st.metric("End Date", "N/A")
+
+    # --- DEBUGGING FEATURE: Check loaded columns ---
+    st.subheader("All Loaded Column Headers")
+    st.code(list(df.columns))
+    st.markdown("---")
+    
+    st.subheader("First 5 Rows of Data")
+    st.dataframe(df.head(), use_container_width=True)
+    
+    st.subheader("Column Information")
+    buffer = io.StringIO()
+    df.info(buf=buffer)
+    info_str = buffer.getvalue()
+    st.code(info_str, language='text')
+
+# =========================================================================
+# Tab 2: Report 1: Transactions by 'Original Currency Symbol'
+# =========================================================================
+with tab2:
+    st.header("Report 1: Filtered Transactions by Currency Symbol")
+    st.markdown("View all transaction details for a specific asset
