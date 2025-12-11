@@ -157,7 +157,7 @@ with tab1:
         with col3:
             st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
     else:
-        # Indentation Fix Applied Here (addresses the IndentationError on line 156 equivalent)
+        # Indentation Fix Applied Here
         with col2:
             st.metric("Start Date", "N/A")
         with col3:
@@ -182,7 +182,6 @@ with tab1:
 # =========================================================================
 with tab2:
     st.header("Report 1: Filtered Transactions by Currency Symbol")
-    # FIX: Explicitly ensuring single-line string to prevent SyntaxError (line 184 equivalent)
     st.markdown("View all transaction details for a specific asset (Token Filter).")
     
     currency_options = df['Original Currency Symbol'].unique()
@@ -197,7 +196,6 @@ with tab2:
     if selected_currency:
         filtered_df = df[df['Original Currency Symbol'] == selected_currency].copy()
         
-        # Fixed line to prevent initial SyntaxError (line 137 equivalent)
         st.subheader(f'All {len(filtered_df):,} transactions for: $\\text{{{selected_currency}}}$') 
         
         st.dataframe(filtered_df, use_container_width=True)
@@ -287,12 +285,13 @@ with tab4:
         # Fixed line to prevent SyntaxError
         st.subheader(f"Running Balance for: {selected_rb_currency} ({len(rb_filtered_df):,} transactions)")
         
+        # --- ATTENTION: Update 'Transaction AC' below if the name is different in your CSV ---
         display_cols = [
             'Timestamp', 
             'Original Currency Symbol', 
             'Direction', 
             'Event Label',
-            'Transaction AC', # ADDED THIS COLUMN as requested
+            'Transaction AC', # <-- CHECK THIS AGAINST TAB 1 COLUMN HEADERS
             'Balance Impact (T)', 
             'Running Balance (T)',
             'Balance Status', # NEW COLUMN
