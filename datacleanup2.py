@@ -73,7 +73,6 @@ def load_data(uploaded_file):
         if 'Timestamp' in df.columns:
             # Convert to datetime, coercing errors to NaT (Not a Time)
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            # Note: We remove NaT/NaN here, but will add another check before resampling in Report 5.
             # df.dropna(subset=['Timestamp'], inplace=True) 
 
         return df
@@ -84,4 +83,74 @@ def load_data(uploaded_file):
 
 
 # -------------------------------------------------------------------------
-# --- Streamlit App Layout
+# --- Streamlit App Layout ---
+# -------------------------------------------------------------------------
+
+st.title("📊 Transaction Ledger Analysis Dashboard")
+st.markdown("Navigate through the tabs below to view different reports generated from your ledger data.")
+
+# --- Sidebar for File Upload and Global Filter ---
+with st.sidebar:
+    st.header("⬆️ Upload Transaction Data")
+    st.info("⚠️ **Please upload your CSV file here** to begin generating reports.")
+    uploaded_file = st.file_uploader(
+        "**Choose a CSV file**", 
+        type=['csv']
+    )
+    st.markdown("---")
+
+
+if uploaded_file is None:
+    st.info("Please upload a CSV file in the sidebar to begin generating reports.")
+    st.stop()
+
+df = load_data(uploaded_file)
+
+if df.empty:
+    st.stop() 
+
+# =========================================================================
+# --- CORE DATA PROCESSING (Running Balance Calculation) ---
+# =========================================================================
+
+# Check both key columns for Running Balance
+if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
+    # 1. Sort by Timestamp (ascending A to Z) as requested
+    df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
+
+    # 2. Calculate Running Balance for each Token
+    df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
+
+    # 3. Create Status Column for Negative Balances
+    df['Balance Status'] = df['Running Balance (T)'].apply(
+        lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
+    )
+
+else:
+    st.error("Cannot calculate Running Balance. Missing 'Timestamp' or 'Balance Impact (T)' column. Check Tab 1 for loaded column names.")
+
+
+# --- Main Report Tabs ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔍 Data Overview", 
+    "💸 Report 1: Currency Filter", 
+    "⚖️ Report 2: Net Flow & Fees", 
+    "💰 Report 3: Running Balance",
+    "📈 Suggested Analytics"
+])
+
+# =========================================================================
+# Tab 1: Data Overview
+# =========================================================================
+with tab1:
+    st.header("Dataset Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Transactions", f"{len(df):,}")
+    
+    if 'Timestamp' in df.columns and not df['Timestamp'].empty:
+        with col2:
+            st.metric("Start Date", df['Timestamp'].min().strftime('%Y-%m-%d'))
+        with col3:
