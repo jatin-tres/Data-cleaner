@@ -20,6 +20,31 @@ st.set_page_config(
     initial_sidebar_state="expanded" 
 )
 
+# --- Helper Function for Debugging Conversion Failures ---
+def safe_to_numeric(series, column_name):
+    """Converts series to numeric and returns indices where conversion failed."""
+    
+    # 1. Clean up currency formatting
+    cleaned_series = series.astype(str).str.replace(r'[$,]', '', regex=True)
+    
+    # 2. Attempt conversion
+    numeric_series = pd.to_numeric(cleaned_series, errors='coerce')
+    
+    # 3. Find indices that failed to convert (are NaN after coercion)
+    failed_indices = cleaned_series[numeric_series.isna()].index.tolist()
+    
+    # Exclude indices where the original value was already empty/NaN
+    failed_indices = [idx for idx in failed_indices if cleaned_series.loc[idx].strip() != '']
+    
+    if failed_indices:
+        st.error(
+            f"❌ Data Error in '{column_name}': Failed to convert non-empty data to number at rows: {failed_indices[:5]}... "
+            f"Please check these rows in your original CSV."
+        )
+    
+    return numeric_series.fillna(0) # Return the converted series (fill NaN with 0 for calculation safety)
+
+
 # --- Helper Function to Load Data ---
 @st.cache_data
 def load_data(uploaded_file):
@@ -33,7 +58,7 @@ def load_data(uploaded_file):
         # Standardize column names by stripping whitespace
         df.columns = df.columns.str.strip()
         
-        # --- Data Cleaning and Type Conversion ---
+        # --- Data Cleaning and Type Conversion (Using the new safe function) ---
         numeric_cols = [
             'Transfer Unit Fiat Price ($)', 
             'Balance Impact (T)', 
@@ -42,20 +67,13 @@ def load_data(uploaded_file):
         
         for col in numeric_cols:
             if col in df.columns:
-                try:
-                    # 1. Clean up currency formatting
-                    cleaned_data = df[col].astype(str).str.replace(r'[$,]', '', regex=True)
-                    
-                    # 2. Force conversion to float, coercing errors to NaN
-                    df[col] = pd.to_numeric(cleaned_data, errors='coerce')
-                except Exception:
-                    st.warning(f"Warning: Could not convert numeric column '{col}'. Defaulting to 0.0 on severe failure.")
-                    df[col] = 0.0
+                # Use the debugging function for critical columns
+                df[col] = safe_to_numeric(df[col], col)
         
         # --- CRITICAL FIX FOR RUNNING BALANCE (Report 3) ---
         if 'Balance Impact (T)' in df.columns:
-            # Explicitly fill NaN with 0 and convert to float64 to ensure cumsum works
-            df['Balance Impact (T)'] = df['Balance Impact (T)'].fillna(0).astype(np.float64)
+            # Re-cast as float64, using the cleaned series from above (which fills NaN/fails with 0)
+            df['Balance Impact (T)'] = df['Balance Impact (T)'].astype(np.float64)
 
         # Fill NaN in 'Original Currency Symbol'
         if 'Original Currency Symbol' in df.columns:
@@ -83,7 +101,7 @@ def load_data(uploaded_file):
         # Ensure Timestamp is datetime for sorting and plotting
         if 'Timestamp' in df.columns:
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-            # Critical: Sort by time now to ensure running balance is correct before any logic runs
+            # Critical: Sort by time now to ensure running balance is correct
             df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
 
         return df
@@ -127,9 +145,6 @@ if df.empty:
 try:
     if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
         
-        # Re-cast to numeric right before cumsum for maximum robustness (Final safety check)
-        df['Balance Impact (T)'] = pd.to_numeric(df['Balance Impact (T)'], errors='coerce').fillna(0)
-
         # 1. Calculate Running Balance for each Token
         df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
 
@@ -171,6 +186,7 @@ if 'Transaction Hash' in df.columns:
             
             # 7. Final Safe Type Casting
             df['Group ID'] = df['Group ID'].fillna(0).astype(int).astype(str).replace('0', '')
+            
         else:
             df['Group ID'] = ''
             df['Group Comment'] = 'NOT a group transaction'
@@ -249,4 +265,10 @@ with tab1:
 # =========================================================================
 with tab2:
     st.header("Report 1: Filtered Transactions by Currency Symbol")
-    st.markdown("
+    st.markdown("View all transaction details for a specific asset (Token Filter).")
+    
+    currency_options = df['Original Currency Symbol'].unique()
+    
+    selected_currency = st.selectbox(
+        "**Select an 'Original Currency Symbol' to filter:**",
+        options=currency_options,
