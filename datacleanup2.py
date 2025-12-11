@@ -25,8 +25,7 @@ st.set_page_config(
 def load_data(uploaded_file):
     """Loads CSV data into a DataFrame and performs initial cleaning."""
     try:
-        # Use StringIO to read the uploaded file content as a pandas DataFrame
-        df = pd.read_csv(io.StringIO(uploaded_file.getvalue().decode("utf-8")))
+        df = pd.read_csv(uploaded_file)
         
         # Standardize column names by stripping whitespace
         df.columns = df.columns.str.strip()
@@ -74,12 +73,13 @@ def load_data(uploaded_file):
         if 'Timestamp' in df.columns:
             # Convert to datetime, coercing errors to NaT (Not a Time)
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+            # Note: We remove NaT/NaN here, but will add another check before resampling in Report 5.
+            # df.dropna(subset=['Timestamp'], inplace=True) 
 
         return df
     except Exception as e:
-        # Display the specific error that occurred during data loading
         st.error(f"Error loading or processing file: {e}")
-        st.error("Please ensure your CSV is valid and contains required columns (Timestamp, Balance Impact (T), etc.)")
+        st.error("Please check that your column headers (like 'Balance Impact (T)', 'Total Fiat Amount ($)', etc.) match exactly.")
         return pd.DataFrame() 
 
 
@@ -129,7 +129,7 @@ if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
 
 else:
     st.error("Cannot calculate Running Balance. Missing 'Timestamp' or 'Balance Impact (T)' column. Check Tab 1 for loaded column names.")
-    # Allow the app to proceed to Tab 1 to show column names even if RB fails
+
 
 # --- Main Report Tabs ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -157,11 +157,10 @@ with tab1:
         with col3:
             st.metric("End Date", df['Timestamp'].max().strftime('%Y-%m-%d'))
     else:
-        # Indentation Fix Applied Here
-        with col2:
-            st.metric("Start Date", "N/A")
-        with col3:
-            st.metric("End Date", "N/A")
+         with col2:
+             st.metric("Start Date", "N/A")
+         with col3:
+             st.metric("End Date", "N/A")
 
     # --- DEBUGGING FEATURE: Check loaded columns ---
     st.subheader("All Loaded Column Headers")
@@ -196,7 +195,7 @@ with tab2:
     if selected_currency:
         filtered_df = df[df['Original Currency Symbol'] == selected_currency].copy()
         
-        st.subheader(f'All {len(filtered_df):,} transactions for: $\\text{{{selected_currency}}}$') 
+        st.subheader(f"All {len(filtered_df):,} transactions for: $\\text{{{selected_currency}}}$")
         
         st.dataframe(filtered_df, use_container_width=True)
         
@@ -282,16 +281,15 @@ with tab4:
 
         rb_filtered_df = df[df['Original Currency Symbol'] == selected_rb_currency].copy()
         
-        # Fixed line to prevent SyntaxError
-        st.subheader(f"Running Balance for: {selected_rb_currency} ({len(rb_filtered_df):,} transactions)")
+        st.subheader(f"Running Balance for: $\\text{{{selected_rb_currency}}}$ ({len(rb_filtered_df):,} transactions)")
         
-        # --- ATTENTION: Update 'Transaction AC' below if the name is different in your CSV ---
+        # --- MODIFIED: Added 'Transaction Hash' to the display columns ---
         display_cols = [
             'Timestamp', 
             'Original Currency Symbol', 
             'Direction', 
             'Event Label',
-            'Transaction AC', # <-- CHECK THIS AGAINST TAB 1 COLUMN HEADERS
+            'Transaction Hash', # <-- ADDED THIS LINE
             'Balance Impact (T)', 
             'Running Balance (T)',
             'Balance Status', # NEW COLUMN
@@ -299,6 +297,7 @@ with tab4:
             'From Address Name', 
             'To Address Name'
         ]
+        # --- END MODIFIED SECTION ---
         
         final_display_cols = [col for col in display_cols if col in rb_filtered_df.columns]
         
