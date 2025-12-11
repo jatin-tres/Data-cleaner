@@ -26,7 +26,6 @@ def load_data(uploaded_file):
     """Loads CSV data into a DataFrame using the file buffer and performs initial cleaning."""
     try:
         # --- ROBUST FILE READING FIX ---
-        # Read the file directly into a StringIO buffer
         stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
         df = pd.read_csv(stringio)
         # --- END FIX ---
@@ -66,7 +65,6 @@ def load_data(uploaded_file):
         if 'Transaction Hash' in df.columns:
              df['Transaction Hash'] = df['Transaction Hash'].astype(str).str.strip().fillna('')
 
-
         # Add a Transaction Type column for the pivot table logic (Report 2)
         if 'Direction' in df.columns and 'Event Label' in df.columns:
             def categorize_transaction(row):
@@ -82,9 +80,12 @@ def load_data(uploaded_file):
             
             df['Transaction Type'] = df.apply(categorize_transaction, axis=1)
             
-        # Ensure Timestamp is datetime for sorting and plotting
+        # --- FINAL FIX FOR TIMESTAMP STABILITY ---
         if 'Timestamp' in df.columns:
+            # Convert to datetime, coercing errors to NaT
             df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+            # Critical: Sort by time now to ensure running balance is correct before any grouping logic runs
+            df = df.sort_values(by='Timestamp', ascending=True)
 
         return df
     except Exception as e:
@@ -126,13 +127,12 @@ if df.empty:
 # --- RUNNING BALANCE CALCULATION ---
 try:
     if 'Timestamp' in df.columns and 'Balance Impact (T)' in df.columns:
-        # 1. Sort by Timestamp (ascending A to Z) as requested
-        df = df.sort_values(by='Timestamp', ascending=True).reset_index(drop=True)
+        # Note: Sorting by Timestamp is now done inside load_data for cache efficiency
 
-        # 2. Calculate Running Balance for each Token
+        # 1. Calculate Running Balance for each Token
         df['Running Balance (T)'] = df.groupby('Original Currency Symbol')['Balance Impact (T)'].cumsum()
 
-        # 3. Create Status Column for Negative Balances
+        # 2. Create Status Column for Negative Balances
         df['Balance Status'] = df['Running Balance (T)'].apply(
             lambda x: "⚠️ NEGATIVE BALANCE" if x < 0 else "OK"
         )
@@ -285,4 +285,29 @@ with tab3:
     st.header("Report 2: Net Flow & Fees by Token (Pivot Table)")
     st.markdown("Shows the aggregated **inflow, outflow, and fees** for each token based on the **Balance Impact (T)** column.")
 
-    if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.
+    if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
+        pivot_table = df.pivot_table(
+            values='Balance Impact (T)',
+            index='Original Currency Symbol',
+            columns='Transaction Type',
+            aggfunc='sum',
+            fill_value=0 
+        )
+
+        pivot_table['net_flow'] = pivot_table['inflow'] + pivot_table['outflow'] + pivot_table.get('fees', 0)
+        
+        pivot_table.columns = [col.replace('_', ' ').title() for col in pivot_table.columns]
+        pivot_table.rename(columns={'Net Flow': 'Net Flow (Balance Impact)'}, inplace=True)
+        
+        pivot_table = pivot_table.sort_values(by='Net Flow (Balance Impact)', ascending=False)
+        
+        st.dataframe(pivot_table, width='stretch')
+
+        # DOWNLOAD BUTTON (Report 2)
+        csv_pivot = pivot_table.to_csv().encode('utf-8')
+        st.download_button(
+            label="⬇️ Download Net Flow & Fees Pivot Table CSV",
+            data=csv_pivot,
+            file_name='Report_2_Net_Flow_Fees_Pivot.csv',
+            mime='text/csv',
+        )
