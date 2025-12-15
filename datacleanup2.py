@@ -224,7 +224,13 @@ with tab3:
             fill_value=0 
         )
 
-        pivot_table['net_flow'] = pivot_table['inflow'] + pivot_table['outflow'] + pivot_table.get('fees', 0)
+        # --- FIX APPLIED HERE: Summing Inflow + Outflow + Fees + Other ---
+        pivot_table['net_flow'] = (
+            pivot_table.get('inflow', 0) + 
+            pivot_table.get('outflow', 0) + 
+            pivot_table.get('fees', 0) + 
+            pivot_table.get('other', 0)
+        )
         
         pivot_table.columns = [col.replace('_', ' ').title() for col in pivot_table.columns]
         pivot_table.rename(columns={'Net Flow': 'Net Flow (Balance Impact)'}, inplace=True)
