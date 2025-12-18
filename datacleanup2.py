@@ -46,14 +46,13 @@ def load_data(uploaded_file):
         if 'Balance Impact (T)' in df.columns:
             df['Balance Impact (T)'] = df['Balance Impact (T)'].fillna(0).astype(np.float64)
 
-        # CRITICAL FIX: Ensure Currency Symbol is always String (Text) to prevent sorting crashes
+        # Ensure Currency Symbol is always String (Text)
         if 'Original Currency Symbol' in df.columns:
             df['Original Currency Symbol'] = df['Original Currency Symbol'].fillna('UNKNOWN').astype(str)
 
         # Add Transaction Type column
         if 'Direction' in df.columns and 'Event Label' in df.columns:
             def categorize_transaction(row):
-                # Safe check for direction
                 direction = str(row['Direction']).lower()
                 event = str(row['Event Label']).lower()
                 
@@ -172,7 +171,6 @@ with tab3:
     if 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
         pivot_table = df.pivot_table(values='Balance Impact (T)', index='Original Currency Symbol', columns='Transaction Type', aggfunc='sum', fill_value=0)
         
-        # Ensure columns exist to avoid KeyErrors
         for needed_col in ['inflow', 'outflow', 'fees', 'other']:
             if needed_col not in pivot_table.columns:
                 pivot_table[needed_col] = 0.0
@@ -203,7 +201,6 @@ with tab3:
 with tab4:
     st.header("Report 3: Token Running Balance")
     if 'Running Balance (T)' in df.columns and 'Timestamp' in df.columns:
-        # Sort options safely
         rb_currency_options = sorted(df['Original Currency Symbol'].unique())
         selected_rb_currency = st.selectbox("**Select a Token to view its Running Balance:**", options=rb_currency_options, key='rb_currency_filter')
         rb_filtered_df = df[df['Original Currency Symbol'] == selected_rb_currency].copy()
@@ -228,7 +225,7 @@ with tab4:
         st.error("Running Balance calculation failed.")
 
 # =========================================================================
-# Tab 5: Suggested Reports
+# Tab 5: Suggested Reports (FIXED for Pandas 2.2.3 Compatibility)
 # =========================================================================
 with tab5:
     st.header("Suggested Analytics & Advanced Reports")
@@ -242,10 +239,20 @@ with tab5:
     with st.expander("Report 5: Monthly Transaction Volume", expanded=True):
         if 'Timestamp' in df.columns and 'Total Fiat Amount ($)' in df.columns:
             temp_df = df[['Timestamp', 'Total Fiat Amount ($)']].dropna(subset=['Timestamp']).copy()
-            monthly_data = temp_df.set_index('Timestamp').resample('M').agg(
-                transaction_count=('Timestamp', 'size'),
-                total_fiat_value=('Total Fiat Amount ($)', 'sum')
-            ).reset_index()
+            
+            # --- FIX: Use dictionary aggregation compatible with Pandas 2.0+ ---
+            monthly_data = temp_df.set_index('Timestamp').resample('M').agg({
+                'Timestamp': 'size',
+                'Total Fiat Amount ($)': 'sum'
+            })
+            
+            # Rename columns after aggregation
+            monthly_data = monthly_data.rename(columns={
+                'Timestamp': 'transaction_count',
+                'Total Fiat Amount ($)': 'total_fiat_value'
+            }).reset_index()
+            # -------------------------------------------------------------------
+
             monthly_data['Month'] = monthly_data['Timestamp'].dt.to_period('M').astype(str)
             st.dataframe(monthly_data, use_container_width=True)
             
@@ -264,25 +271,19 @@ with tab5:
             st.altair_chart(chart_cp, use_container_width=True)
 
 # =========================================================================
-# Tab 6: Report: Date-Specific Flow (UPDATED & FIXED)
+# Tab 6: Report: Date-Specific Flow
 # =========================================================================
 with tab6:
     st.header("Report Settings: Flows & Balances")
     
-    # 1. Filters Layout
     col_r6_1, col_r6_2 = st.columns(2)
     
     with col_r6_1:
-        # Token Filter: Added 'ALL'
-        # SAFE SORTING FIX: Convert to string before sorting to prevent app crashes on mixed data
+        # Token Filter
         unique_tokens = sorted([str(x) for x in df['Original Currency Symbol'].unique()])
         r6_tokens = ['ALL'] + unique_tokens
         
-        selected_token_r6 = st.selectbox(
-            "Select Token (Currency)", 
-            options=r6_tokens,
-            key='r6_token_select'
-        )
+        selected_token_r6 = st.selectbox("Select Token (Currency)", options=r6_tokens, key='r6_token_select')
         
     with col_r6_2:
         # Date Filter
@@ -291,7 +292,6 @@ with tab6:
 
     st.markdown("---")
     
-    # 2. Calculation Logic
     if 'Timestamp' in df.columns and 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
         
         # LOGIC FOR "ALL" TOKENS
