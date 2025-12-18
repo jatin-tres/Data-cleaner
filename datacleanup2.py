@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import sys
+import datetime
 
 # --- CHECK FOR ALTAIR ---
 try:
@@ -132,12 +133,13 @@ else:
 
 
 # --- Main Report Tabs ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🔍 Data Overview", 
     "💸 Report 1: Currency Filter", 
     "⚖️ Report 2: Net Flow & Fees", 
     "💰 Report 3: Running Balance",
-    "📈 Suggested Analytics"
+    "📈 Suggested Analytics",
+    "📅 Report: Date-Specific Flow" # <--- NEW TAB ADDED HERE
 ])
 
 # =========================================================================
@@ -295,15 +297,14 @@ with tab4:
             'Original Currency Symbol', 
             'Direction', 
             'Event Label',
-            'Transaction Hash', # <-- ADDED THIS LINE
+            'Transaction Hash',
             'Balance Impact (T)', 
             'Running Balance (T)',
-            'Balance Status', # NEW COLUMN
+            'Balance Status',
             'Total Fiat Amount ($)',
             'From Address Name', 
             'To Address Name'
         ]
-        # --- END MODIFIED SECTION ---
         
         final_display_cols = [col for col in display_cols if col in rb_filtered_df.columns]
         
@@ -474,6 +475,93 @@ with tab5:
             st.altair_chart(chart_cp, use_container_width=True)
         else:
             st.warning("Cannot generate Counterparties report. A '3rd Party' or 'Address' column is missing or not identifiable.")
+
+# =========================================================================
+# Tab 6: Report: Date-Specific Flow (The Requested New Report)
+# =========================================================================
+with tab6:
+    st.header("Report Settings: Flows & Balances")
+    
+    # 1. Filters Layout
+    col_r6_1, col_r6_2 = st.columns(2)
+    
+    with col_r6_1:
+        # Token (Original Currency Symbol) Filter
+        r6_tokens = df['Original Currency Symbol'].unique()
+        selected_token_r6 = st.selectbox(
+            "Select Token (Currency)", 
+            options=r6_tokens,
+            key='r6_token_select'
+        )
+        
+    with col_r6_2:
+        # Balance As Of EOD Filter
+        # Default to the latest date in the file, or today if no date found
+        default_date = df['Timestamp'].max().date() if 'Timestamp' in df.columns and not df['Timestamp'].isnull().all() else datetime.date.today()
+        
+        balance_eod_date = st.date_input(
+            "Balance As Of EOD",
+            value=default_date,
+            key='r6_date_picker'
+        )
+
+    st.markdown("---")
+    
+    # 2. Calculation Logic
+    if 'Timestamp' in df.columns and 'Transaction Type' in df.columns and 'Balance Impact (T)' in df.columns:
+        
+        # Filter Data: Matches Token AND is ON or BEFORE the selected date
+        mask_r6 = (
+            (df['Original Currency Symbol'] == selected_token_r6) & 
+            (df['Timestamp'].dt.date <= balance_eod_date)
+        )
+        
+        df_r6 = df[mask_r6].copy()
+        
+        if not df_r6.empty:
+            # Calculate Sums by Transaction Type
+            # Note: We filter by the specific string values assigned in 'load_data'
+            inflow_sum = df_r6[df_r6['Transaction Type'] == 'inflow']['Balance Impact (T)'].sum()
+            outflow_sum = df_r6[df_r6['Transaction Type'] == 'outflow']['Balance Impact (T)'].sum()
+            fees_sum = df_r6[df_r6['Transaction Type'] == 'fees']['Balance Impact (T)'].sum()
+            other_sum = df_r6[df_r6['Transaction Type'] == 'other']['Balance Impact (T)'].sum()
+            
+            # Net Balance Calculation
+            net_balance = inflow_sum + outflow_sum + fees_sum + other_sum
+            
+            # Display Metrics
+            st.subheader(f"Financials for {selected_token_r6}")
+            st.caption(f"Data included from start up to EOD: {balance_eod_date}")
+            
+            col_met1, col_met2, col_met3, col_met4 = st.columns(4)
+            
+            with col_met1:
+                st.metric(label="Total Inflow", value=f"{inflow_sum:,.4f}")
+            with col_met2:
+                st.metric(label="Total Outflow", value=f"{outflow_sum:,.4f}")
+            with col_met3:
+                st.metric(label="Total Fees", value=f"{fees_sum:,.4f}")
+            with col_met4:
+                st.metric(label="Net Balance (As of Date)", value=f"{net_balance:,.4f}")
+            
+            st.markdown("### Transaction Details (Filtered Range)")
+            st.dataframe(df_r6, use_container_width=True)
+            
+            # Download Button for this specific report
+            csv_r6 = df_r6.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label=f"⬇️ Download {selected_token_r6} Report (As of {balance_eod_date})",
+                data=csv_r6,
+                file_name=f'Report_Date_Range_{selected_token_r6}_{balance_eod_date}.csv',
+                mime='text/csv',
+            )
+            
+        else:
+            st.info(f"No transactions found for **{selected_token_r6}** on or before **{balance_eod_date}**.")
+            
+    else:
+        st.error("Required columns ('Timestamp', 'Transaction Type', 'Balance Impact (T)') are missing. Cannot generate report.")
+
 
 # -------------------------------------------------------------------------
 # --- How to Run Section (in sidebar) ---
